@@ -5,12 +5,20 @@
 #include <signal.h>
 #include <net/if.h>
 #include <pcap.h>
+#include <netinet/ether.h>
 #include <netinet/if_ether.h>
+
+struct ethers_ip_ll {
+    struct ethers_ip_ll * next;
+    u_char mac[ETH_ALEN];
+    u_char ip[4];
+};
 
 /* for the sake of clarity we'll use globals for a few things */
 char *device;       /* device to sniff on */
 int verbose = 0;    /* verbose output about device */
 pcap_t *handle;     /* handle for the opened pcap session */
+struct ethers_ip_ll *ptr_ethip_ll;
 
 /* gracefully handle a Control C */
 void ctrl_c(int)
@@ -30,6 +38,58 @@ void usage(char *name)
     printf("    -l    list available interfaces\n");
     printf("    -v    print verbose info\n\n");
     exit(1);
+}
+
+/* read /etc/ethers */
+void parse_ethers(const char * ethers)
+{
+    char * line = NULL;
+    char hostname[256];
+    size_t len = 0;
+    ssize_t read;
+    struct ether_addr mac;
+    struct in_addr ip;
+    struct ethers_ip_ll * dummy;
+
+    FILE *fp = fopen(ethers, "r");
+    if (fp == NULL)
+    {
+        fprintf(stderr, "Cannot open file %s\n", ethers);
+        exit(EXIT_FAILURE);
+    }
+
+    ptr_ethip_ll = NULL;
+
+    while ((read = getline(&line, &len, fp)) != -1)
+    {
+        if (verbose)
+        {
+            printf("Retrieved line of length %zu:\n", read);
+        }
+        if (ether_line(line, &mac, hostname) == 0)
+        {
+            inet_aton(hostname, &ip);
+            dummy = (struct ethers_ip_ll *) malloc(sizeof(struct ethers_ip_ll));
+            dummy->next = ptr_ethip_ll;
+            for (int i = 0; i < ETH_ALEN; i++)
+            {
+                dummy->mac[i] = mac.ether_addr_octet[i];
+            }
+            dummy->ip[3] = (u_char) ip.s_addr & 0xff;
+            dummy->ip[2] = (u_char) (ip.s_addr >> 8)  & 0xff;
+            dummy->ip[1] = (u_char) (ip.s_addr >> 16)  & 0xff;
+            dummy->ip[0] = (u_char) (ip.s_addr >> 24)  & 0xff;
+            ptr_ethip_ll = dummy;
+            if (verbose)
+            {
+                printf("%d.%d.%d.%d %02x:%02x:%02x:%02x:%02x:%02x\n", dummy->ip[3], dummy->ip[2], dummy->ip[1], dummy->ip[0], dummy->mac[0], dummy->mac[1], dummy->mac[2], dummy->mac[3], dummy->mac[4], dummy->mac[5]);
+            }
+        }
+    }
+
+    fclose(fp);
+    if (line)
+        free(line);
 }
 
 /* callback function to process a packet when captured */
@@ -105,6 +165,8 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
         arp_reply_packet->arp_sha[4] = 0x8a;
         arp_reply_packet->arp_sha[5] = 0xe6;
         
+        if (verbose)
+        {
         printf("ARP Reply Source: %d.%d.%d.%d\t\tDestination: %d.%d.%d.%d\n",
             arp_reply_packet->arp_spa[0],
             arp_reply_packet->arp_spa[1],
@@ -128,7 +190,7 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
             arp_reply_packet->arp_tha[3],
             arp_reply_packet->arp_tha[4],
             arp_reply_packet->arp_tha[5]);
-            
+        }
         /* set errbuf to 0 length string to check for warnings */
         errbuf[0] = 0;
 
@@ -204,6 +266,8 @@ int main(int argc, char *argv[])
                 break;
         }
     }
+
+    parse_ethers("/etc/ethers");
 
     /* setup signal handler so Control-C will gracefully exit */
     signal(SIGINT, ctrl_c);
