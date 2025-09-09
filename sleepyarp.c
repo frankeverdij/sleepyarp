@@ -71,11 +71,18 @@ int parse_device(struct pcap_addr *adptr, struct ethers_ip_ll *myptr)
         adptr = adptr->next;
     }
 
+    if (verbose)
+    {
+        printf("host %08x %02x:%02x:%02x:%02x:%02x:%02x\n", myptr->ip,
+            myptr->mac[0], myptr->mac[1], myptr->mac[2],
+            myptr->mac[3], myptr->mac[4], myptr->mac[5]);
+    }
+
     return ((flag_mac == 1 && flag_ip == 1) ? 0 : -1);
 }
 
 /* reads ip and ethernet-MAC entries from file*/
-void parse_ethers(struct ethers_ip_ll ** dllptr, const char * filename)
+int parse_ethers(struct ethers_ip_ll ** dllptr, const char * filename)
 {
     char * line = NULL;
     char hostname[256];
@@ -84,6 +91,7 @@ void parse_ethers(struct ethers_ip_ll ** dllptr, const char * filename)
     struct ether_addr mac;
     struct in_addr ip;
     struct ethers_ip_ll * dummy, * llptr;
+    int found = 0;
 
     FILE *fp = fopen(filename, "r");
     if (fp == NULL)
@@ -136,6 +144,8 @@ void parse_ethers(struct ethers_ip_ll ** dllptr, const char * filename)
                     dummy->mac[0], dummy->mac[1], dummy->mac[2],
                     dummy->mac[3], dummy->mac[4], dummy->mac[5]);
             }
+
+            found++;
         }
     }
 
@@ -146,6 +156,8 @@ void parse_ethers(struct ethers_ip_ll ** dllptr, const char * filename)
         free(line);
 
     fclose(fp);
+
+    return found;
 }
 
 /* callback function to process a packet when captured */
@@ -350,7 +362,11 @@ int main(int argc, char *argv[])
             exit(1);
     }
 
-    parse_ethers(&ptr_ethip_ll, "/etc/ethers");
+    if (parse_ethers(&ptr_ethip_ll, "/etc/ethers") == 0)
+    {
+            fprintf(stderr, "no usable entries in ether file\n");
+            exit(1);
+    }
 
     /* set errbuf to 0 length string to check for warnings */
     errbuf[0] = 0;
