@@ -133,7 +133,7 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
 
     arp_packet = (struct ether_arp *) (packet + ETH_HLEN);
     
-    /* Only look at requests... */*/
+    /* Only look at requests... */
     if (ntohs(arp_packet->arp_op) != ARPOP_REQUEST)
         return;
 
