@@ -8,10 +8,11 @@
 #include <netinet/ether.h>
 #include <netinet/if_ether.h>
 
+/* linked list with ip <-> ethernet MAC entries form /etc/ethers */
 struct ethers_ip_ll {
     struct ethers_ip_ll * next;
+    uint32_t ip;
     u_char mac[ETH_ALEN];
-    u_char ip[4];
 };
 
 /* for the sake of clarity we'll use globals for a few things */
@@ -40,8 +41,8 @@ void usage(char *name)
     exit(1);
 }
 
-/* read /etc/ethers */
-void parse_ethers(const char * ethers)
+/* reads ip and ethernet-MAC entries from file*/
+void parse_ethers(struct ethers_ip_ll ** dllptr, const char * filename)
 {
     char * line = NULL;
     char hostname[256];
@@ -49,47 +50,69 @@ void parse_ethers(const char * ethers)
     ssize_t read;
     struct ether_addr mac;
     struct in_addr ip;
-    struct ethers_ip_ll * dummy;
+    struct ethers_ip_ll * dummy, * llptr;
 
-    FILE *fp = fopen(ethers, "r");
+    FILE *fp = fopen(filename, "r");
     if (fp == NULL)
     {
-        fprintf(stderr, "Cannot open file %s\n", ethers);
+        fprintf(stderr, "Cannot open file %s\n", filename);
         exit(EXIT_FAILURE);
     }
 
-    ptr_ethip_ll = NULL;
+    /* reset global linked list pointer, but check if there are still entries */
+    /* if there are, free them... */
+    llptr = *dllptr;
+
+    while (llptr != NULL)
+    {
+        dummy = llptr->next;
+        free(llptr);
+        llptr = dummy;
+    }
 
     while ((read = getline(&line, &len, fp)) != -1)
     {
-        if (verbose)
-        {
-            printf("Retrieved line of length %zu:\n", read);
-        }
+        /* parse a line containing ethernet and hostname entries */
         if (ether_line(line, &mac, hostname) == 0)
         {
+            /* convert hostname string to 32bit integer */
             inet_aton(hostname, &ip);
+
+            /* allocate entry */
             dummy = (struct ethers_ip_ll *) malloc(sizeof(struct ethers_ip_ll));
-            dummy->next = ptr_ethip_ll;
+            dummy->next = llptr;
+
+            /* fill the ethernet member */
             for (int i = 0; i < ETH_ALEN; i++)
             {
                 dummy->mac[i] = mac.ether_addr_octet[i];
             }
-            dummy->ip[3] = (u_char) ip.s_addr & 0xff;
-            dummy->ip[2] = (u_char) (ip.s_addr >> 8)  & 0xff;
-            dummy->ip[1] = (u_char) (ip.s_addr >> 16)  & 0xff;
-            dummy->ip[0] = (u_char) (ip.s_addr >> 24)  & 0xff;
-            ptr_ethip_ll = dummy;
+
+            /* Leave the representation of the ip address to a 32 bit integer. */
+            /* This makes it much more convenient to search for a host. */
+            /* Note that this number is big-endian, but that doesn't really
+            /* matter when comparing addresses. */
+            dummy->ip = ip.s_addr;
+
+            /* update the linked list next pointer */
+            llptr = dummy;
+
             if (verbose)
             {
-                printf("%d.%d.%d.%d %02x:%02x:%02x:%02x:%02x:%02x\n", dummy->ip[3], dummy->ip[2], dummy->ip[1], dummy->ip[0], dummy->mac[0], dummy->mac[1], dummy->mac[2], dummy->mac[3], dummy->mac[4], dummy->mac[5]);
+                printf("entry %08x %02x:%02x:%02x:%02x:%02x:%02x\n", dummy->ip,
+                    dummy->mac[0], dummy->mac[1], dummy->mac[2],
+                    dummy->mac[3], dummy->mac[4], dummy->mac[5]);
             }
         }
     }
 
-    fclose(fp);
+    /* update the pointer */
+    *dllptr = llptr;
+
     if (line)
         free(line);
+
+    fclose(fp);
 }
 
 /* callback function to process a packet when captured */
@@ -97,18 +120,20 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
     const u_char * packet)
 {
     struct ether_header *eth_header;  /* in ethernet.h included by if_eth.h */
-    struct ether_arp *arp_packet; /* from if_eth.h */
+    struct ether_arp *arp_packet;     /* from if_eth.h */
     char *op;
     char errbuf[PCAP_ERRBUF_SIZE];
     int r;
 
     eth_header = (struct ether_header *) packet;
 
+    /* Only look at ARP messages... */
     if (ntohs(eth_header->ether_type) != ETHERTYPE_ARP)
         return;
 
     arp_packet = (struct ether_arp *) (packet + ETH_HLEN);
     
+    /* Only look at requests... */*/
     if (ntohs(arp_packet->arp_op) != ARPOP_REQUEST)
         return;
 
@@ -222,7 +247,6 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
 
         /* close our devices */
         pcap_close(reply);
-
     }
 }
 
@@ -267,7 +291,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    parse_ethers("/etc/ethers");
+    parse_ethers(&ptr_ethip_ll, "/etc/ethers");
 
     /* setup signal handler so Control-C will gracefully exit */
     signal(SIGINT, ctrl_c);
