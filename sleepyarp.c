@@ -7,6 +7,7 @@
 #include <pcap.h>
 #include <netinet/ether.h>
 #include <netinet/if_ether.h>
+#include <linux/if_packet.h>
 
 /* linked list with ip <-> ethernet MAC entries form /etc/ethers */
 struct ethers_ip_ll {
@@ -19,7 +20,7 @@ struct ethers_ip_ll {
 char *device;       /* device to sniff on */
 int verbose = 0;    /* verbose output about device */
 pcap_t *handle;     /* handle for the opened pcap session */
-struct ethers_ip_ll *ptr_ethip_ll;
+struct ethers_ip_ll *ptr_ethip_ll, my_ethers_ip;
 
 /* gracefully handle a Control C */
 void ctrl_c(int)
@@ -39,6 +40,38 @@ void usage(char *name)
     printf("    -l    list available interfaces\n");
     printf("    -v    print verbose info\n\n");
     exit(1);
+}
+
+/* parse device struct from pcap_findalldevs() */
+int parse_device(struct pcap_addr *adptr, struct ethers_ip_ll *myptr)
+{
+    struct sockaddr *addr;
+    struct sockaddr_ll *pktaddr;
+    struct sockaddr_in *ipaddr;
+    int flag_mac = 0, flag_ip = 0;
+
+    while ((adptr != NULL) && ((flag_mac == 0) || (flag_ip == 0)))
+    {
+        addr = adptr->addr;
+        if ((addr->sa_family == AF_PACKET) && (flag_mac == 0))
+        {
+            pktaddr = (struct sockaddr_ll *) addr;
+            for (int i = 0; i < pktaddr->sll_halen; i++)
+            {
+                myptr->mac[i] = (u_char) pktaddr->sll_addr[i];
+            }
+            flag_mac = 1;
+        }
+        else if ((addr->sa_family == AF_INET) && (flag_ip == 0))
+        {
+            ipaddr = (struct sockaddr_in *) addr;
+            myptr->ip =  (uint32_t) ipaddr->sin_addr.s_addr;
+            flag_ip = 1;
+        }
+        adptr = adptr->next;
+    }
+
+    return ((flag_mac == 1 && flag_ip == 1) ? 0 : -1);
 }
 
 /* reads ip and ethernet-MAC entries from file*/
@@ -224,7 +257,6 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
             42,  /* maximum number of bytes to capture per packet */
             PCAP_OPENFLAG_PROMISCUOUS, /* promisc - 1 to set card in promiscuous mode, 0 to not */
             500, /* to_ms - amount of time to perform packet capture in milliseconds */
-
             errbuf); /* error message buffer if something goes wrong */
 
         if (reply == NULL)   /* there was an error */
@@ -262,6 +294,7 @@ int main(int argc, char *argv[])
     struct bpf_program fp;          /* compiled BPF filter */
     int r;                          /* generic return value */
     pcap_if_t *alldevsp;            /* list of interfaces */
+    struct pcap_addr *addresses;
 
     while ((o = getopt(argc, argv, "i:vl")) > 0)
     {
@@ -291,8 +324,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    parse_ethers(&ptr_ethip_ll, "/etc/ethers");
-
     /* setup signal handler so Control-C will gracefully exit */
     signal(SIGINT, ctrl_c);
 
@@ -311,6 +342,15 @@ int main(int argc, char *argv[])
             exit(1);
         }
     }
+
+    addresses = alldevsp->addresses;
+    if (parse_device(addresses, &my_ethers_ip) != 0)
+    {
+            fprintf(stderr, "parsing host ip and mac failed\n");
+            exit(1);
+    }
+
+    parse_ethers(&ptr_ethip_ll, "/etc/ethers");
 
     /* set errbuf to 0 length string to check for warnings */
     errbuf[0] = 0;
