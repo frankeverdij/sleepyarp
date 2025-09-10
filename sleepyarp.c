@@ -11,7 +11,7 @@
 
 /* linked list with ip <-> ethernet MAC entries form /etc/ethers */
 struct ethers_ip_ll {
-    struct ethers_ip_ll * next;
+    struct ethers_ip_ll *next;
     uint32_t ip;
     u_char mac[ETH_ALEN];
 };
@@ -81,16 +81,16 @@ int parse_device(struct pcap_addr *adptr, struct ethers_ip_ll *myptr)
     return ((flag_mac == 1 && flag_ip == 1) ? 0 : -1);
 }
 
-/* reads ip and ethernet-MAC entries from file*/
-int parse_ethers(struct ethers_ip_ll ** dllptr, const char * filename)
+/* reads ip and ethernet-MAC entries from file */
+int parse_ethers(struct ethers_ip_ll **dllptr, const char *filename)
 {
-    char * line = NULL;
+    char *line = NULL;
     char hostname[256];
     size_t len = 0;
     ssize_t read;
     struct ether_addr mac;
     struct in_addr ip;
-    struct ethers_ip_ll * dummy, * llptr;
+    struct ethers_ip_ll *dummy, *llptr;
     int found = 0;
 
     FILE *fp = fopen(filename, "r");
@@ -131,7 +131,7 @@ int parse_ethers(struct ethers_ip_ll ** dllptr, const char * filename)
 
             /* Leave the representation of the ip address to a 32 bit integer. */
             /* This makes it much more convenient to search for a host. */
-            /* Note that this number is big-endian, but that doesn't really
+            /* Note that this number is big-endian, but that doesn't really */
             /* matter when comparing addresses. */
             dummy->ip = ip.s_addr;
 
@@ -162,13 +162,11 @@ int parse_ethers(struct ethers_ip_ll ** dllptr, const char * filename)
 
 /* callback function to process a packet when captured */
 void process_packet(u_char *user, const struct pcap_pkthdr *header,
-    const u_char * packet)
+    const u_char *packet)
 {
     struct ether_header *eth_header;  /* in ethernet.h included by if_eth.h */
     struct ether_arp *arp_packet;     /* from if_eth.h */
-    char *op;
     char errbuf[PCAP_ERRBUF_SIZE];
-    int r;
 
     eth_header = (struct ether_header *) packet;
 
@@ -189,12 +187,12 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
     {
         printf("ARP to thule detected.\n");
         
-        pcap_t * reply;
+        pcap_t *reply;
         const u_char reply_packet[42];
         struct ether_header *eth_reply_header = (struct ether_header *) reply_packet;
         struct ether_arp *arp_reply_packet = (struct ether_arp *) (reply_packet + ETH_HLEN);
 
-        for (int i; i < ETH_ALEN; i++)
+        for (int i = 0; i < ETH_ALEN; i++)
         {
             eth_reply_header->ether_dhost[i] = eth_header->ether_shost[i];
         }
@@ -212,12 +210,11 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
         arp_reply_packet->arp_hln = ETH_ALEN;
         arp_reply_packet->arp_pln = 4;
         arp_reply_packet->arp_op = htons(ARPOP_REPLY);
-        for (int i; i < 4; i++)
+        for (int i = 0; i < 4; i++)
         {
             arp_reply_packet->arp_spa[i] = arp_packet->arp_tpa[i];
             arp_reply_packet->arp_tpa[i] = arp_packet->arp_spa[i];
         }
-        eth_reply_header->ether_type = htons(ETHERTYPE_ARP);
 
         /* rhea (192.168.178.8) has MAC address 2c:f0:5d:3b:d0:ce */
         arp_reply_packet->arp_tha[0] = 0x2c;
@@ -298,8 +295,6 @@ int main(int argc, char *argv[])
 {
     char o;                         /* for option processing */
     char errbuf[PCAP_ERRBUF_SIZE];  /* pcap error messages buffer */
-    struct pcap_pkthdr header;      /* packet header from pcap */
-    const u_char *packet;           /* packet */
     bpf_u_int32 netp;               /* ip address of interface */
     bpf_u_int32 maskp;              /* subnet mask of interface */
     char *filter = "arp";           /* filter for BPF (human readable) */
