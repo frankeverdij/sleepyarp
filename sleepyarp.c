@@ -305,7 +305,7 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
 
 int main(int argc, char *argv[])
 {
-    char o;                         /* for option processing */
+    signed char o;                  /* for option processing */
     char errbuf[PCAP_ERRBUF_SIZE];  /* pcap error messages buffer */
     bpf_u_int32 netp;               /* ip address of interface */
     bpf_u_int32 maskp;              /* subnet mask of interface */
