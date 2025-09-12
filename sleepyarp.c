@@ -167,6 +167,8 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
     struct ether_header *eth_header;  /* in ethernet.h included by if_eth.h */
     struct ether_arp *arp_packet;     /* from if_eth.h */
     char errbuf[PCAP_ERRBUF_SIZE];
+    struct ethers_ip_ll * ptr_ei = ptr_ethip_ll;
+    uint32_t dst;
 
     eth_header = (struct ether_header *) packet;
 
@@ -180,114 +182,124 @@ void process_packet(u_char *user, const struct pcap_pkthdr *header,
     if (ntohs(arp_packet->arp_op) != ARPOP_REQUEST)
         return;
 
-    if ((arp_packet->arp_tpa[0] == 192) &&
-        (arp_packet->arp_tpa[1] == 168) &&
-        (arp_packet->arp_tpa[2] == 178) &&
-        (arp_packet->arp_tpa[3] == 10))
+    /* good, we have an ARP request... */
+    /* first, convert ip-quad of the requested host to a 32-bit integer */
+    dst = arp_packet->arp_tpa[3] << 24;
+    dst |= arp_packet->arp_tpa[2] << 16;
+    dst |= arp_packet->arp_tpa[1] << 8;
+    dst |= arp_packet->arp_tpa[0];
+
+    /* now loop through all the ether entries */
+    while (ptr_ei != NULL)
     {
-        printf("ARP to thule detected.\n");
+        /* match the requested ip address with an entry in the ethers table */
+        if (dst == ptr_ei->ip)
+        {
+            /* we have a match */
+            if (verbose)
+            {
+                printf("ARP ethers entry detected.\n");
+            }
+
+            /* allocate the reply packet here, so that it goes out of scope */
+            /*  when the reply packet leaves the interface */
+            pcap_t *reply;
+            const u_char reply_packet[42];
+            struct ether_header *eth_reply_header = (struct ether_header *) reply_packet;
+            struct ether_arp *arp_reply_packet = (struct ether_arp *) (reply_packet + ETH_HLEN);
+
+            /* for the ether header we only need to set the MAC addresses correctly */
+            for (int i = 0; i < ETH_ALEN; i++)
+            {
+                /* destination MAC is from the machine from where the request originates */
+                eth_reply_header->ether_dhost[i] = arp_packet->arp_sha[i];
+                /* source MAC is from THIS machine */
+                eth_reply_header->ether_shost[i] = my_ethers_ip.mac[i];
+            }
+            /* not necessary, but we set it anyway */
+            eth_reply_header->ether_type = htons(ETHERTYPE_ARP);
+
+            /* now build the ARP part of the reply packet */
+            arp_reply_packet->arp_hrd = htons(ARPHRD_ETHER);
+            arp_reply_packet->arp_pro = htons(ETHERTYPE_IP);
+            arp_reply_packet->arp_hln = ETH_ALEN;
+            arp_reply_packet->arp_pln = 4;
+            arp_reply_packet->arp_op = htons(ARPOP_REPLY);
+
+            for (int i = 0; i < 4; i++)
+            {
+                /* reply with the IP address of the sleeping host as source */
+                arp_reply_packet->arp_spa[i] = arp_packet->arp_tpa[i];
+                /* the destination IP is taken from the request packet */
+                arp_reply_packet->arp_tpa[i] = arp_packet->arp_spa[i];
+            }
+
+            for (int i = 0; i < ETH_ALEN; i++)
+            {
+                /* send the requested MAC of the sleeping host */
+                arp_reply_packet->arp_sha[i] = ptr_ei->mac[i];
+                /* destination MAC is the source MAC from the request packet */
+                arp_reply_packet->arp_tha[i] = arp_packet->arp_sha[i];
+            }
         
-        pcap_t *reply;
-        const u_char reply_packet[42];
-        struct ether_header *eth_reply_header = (struct ether_header *) reply_packet;
-        struct ether_arp *arp_reply_packet = (struct ether_arp *) (reply_packet + ETH_HLEN);
+            if (verbose)
+            {
+            printf("ARP Reply Source: %d.%d.%d.%d\t\tDestination: %d.%d.%d.%d\n",
+                arp_reply_packet->arp_spa[0],
+                arp_reply_packet->arp_spa[1],
+                arp_reply_packet->arp_spa[2],
+                arp_reply_packet->arp_spa[3],
+                arp_reply_packet->arp_tpa[0],
+                arp_reply_packet->arp_tpa[1],
+                arp_reply_packet->arp_tpa[2],
+                arp_reply_packet->arp_tpa[3]);
 
-        for (int i = 0; i < ETH_ALEN; i++)
-        {
-            eth_reply_header->ether_dhost[i] = eth_header->ether_shost[i];
-        }
-        eth_reply_header->ether_shost[0] = 0x2c;
-        eth_reply_header->ether_shost[1] = 0xf0;
-        eth_reply_header->ether_shost[2] = 0x5d;
-        eth_reply_header->ether_shost[3] = 0x3b;
-        eth_reply_header->ether_shost[4] = 0xd0;
-        eth_reply_header->ether_shost[5] = 0xce;
+            printf("    src MAC: %02x:%02x:%02x:%02x:%02x:%02x\tdst MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                arp_reply_packet->arp_sha[0],
+                arp_reply_packet->arp_sha[1],
+                arp_reply_packet->arp_sha[2],
+                arp_reply_packet->arp_sha[3],
+                arp_reply_packet->arp_sha[4],
+                arp_reply_packet->arp_sha[5],
+                arp_reply_packet->arp_tha[0],
+                arp_reply_packet->arp_tha[1],
+                arp_reply_packet->arp_tha[2],
+                arp_reply_packet->arp_tha[3],
+                arp_reply_packet->arp_tha[4],
+                arp_reply_packet->arp_tha[5]);
+            }
+            /* set errbuf to 0 length string to check for warnings */
+            errbuf[0] = 0;
 
-        eth_reply_header->ether_type = htons(ETHERTYPE_ARP);
+            /* open device for sending the reply packet */
+            reply = pcap_open_live(device,  /* device to sniff on */
+                42,  /* maximum number of bytes to capture per packet */
+                PCAP_OPENFLAG_PROMISCUOUS, /* promisc - 1 to set card in promiscuous mode, 0 to not */
+                500, /* to_ms - amount of time to perform packet capture in milliseconds */
+                errbuf); /* error message buffer if something goes wrong */
 
-        arp_reply_packet->arp_hrd = htons(ARPHRD_ETHER);
-        arp_reply_packet->arp_pro = htons(ETHERTYPE_IP);
-        arp_reply_packet->arp_hln = ETH_ALEN;
-        arp_reply_packet->arp_pln = 4;
-        arp_reply_packet->arp_op = htons(ARPOP_REPLY);
-        for (int i = 0; i < 4; i++)
-        {
-            arp_reply_packet->arp_spa[i] = arp_packet->arp_tpa[i];
-            arp_reply_packet->arp_tpa[i] = arp_packet->arp_spa[i];
-        }
+            if (reply == NULL)   /* there was an error */
+            {
+                fprintf(stderr, "%s", errbuf);
+                exit(1);
+            }
 
-        /* rhea (192.168.178.8) has MAC address 2c:f0:5d:3b:d0:ce */
-        arp_reply_packet->arp_tha[0] = 0x2c;
-        arp_reply_packet->arp_tha[1] = 0xf0;
-        arp_reply_packet->arp_tha[2] = 0x5d;
-        arp_reply_packet->arp_tha[3] = 0x3b;
-        arp_reply_packet->arp_tha[4] = 0xd0;
-        arp_reply_packet->arp_tha[5] = 0xce;
-
-        /* thule (192.168.178.10) has MAC address 5c:f9:dd:76:8a:e6 */
-        arp_reply_packet->arp_sha[0] = 0x5c;
-        arp_reply_packet->arp_sha[1] = 0xf9;
-        arp_reply_packet->arp_sha[2] = 0xdd;
-        arp_reply_packet->arp_sha[3] = 0x76;
-        arp_reply_packet->arp_sha[4] = 0x8a;
-        arp_reply_packet->arp_sha[5] = 0xe6;
+            if (strlen(errbuf) > 0)
+            {
+                fprintf(stderr, "Warning: %s", errbuf);  /* a warning was generated */
+                errbuf[0] = 0;    /* re-set error buffer */
+            }
         
-        if (verbose)
-        {
-        printf("ARP Reply Source: %d.%d.%d.%d\t\tDestination: %d.%d.%d.%d\n",
-            arp_reply_packet->arp_spa[0],
-            arp_reply_packet->arp_spa[1],
-            arp_reply_packet->arp_spa[2],
-            arp_reply_packet->arp_spa[3],
-            arp_reply_packet->arp_tpa[0],
-            arp_reply_packet->arp_tpa[1],
-            arp_reply_packet->arp_tpa[2],
-            arp_reply_packet->arp_tpa[3]);
+            if (pcap_sendpacket(reply, reply_packet, 42) < 0)
+            {
+                fprintf(stderr, "%s", errbuf);
+                exit(1);
+            }
 
-        printf("    src MAC: %02x:%02x:%02x:%02x:%02x:%02x\tdst MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
-            arp_reply_packet->arp_sha[0],
-            arp_reply_packet->arp_sha[1],
-            arp_reply_packet->arp_sha[2],
-            arp_reply_packet->arp_sha[3],
-            arp_reply_packet->arp_sha[4],
-            arp_reply_packet->arp_sha[5],
-            arp_reply_packet->arp_tha[0],
-            arp_reply_packet->arp_tha[1],
-            arp_reply_packet->arp_tha[2],
-            arp_reply_packet->arp_tha[3],
-            arp_reply_packet->arp_tha[4],
-            arp_reply_packet->arp_tha[5]);
+            /* close our devices */
+            pcap_close(reply);
         }
-        /* set errbuf to 0 length string to check for warnings */
-        errbuf[0] = 0;
-
-        /* open device for sniffing */
-        reply = pcap_open_live(device,  /* device to sniff on */
-            42,  /* maximum number of bytes to capture per packet */
-            PCAP_OPENFLAG_PROMISCUOUS, /* promisc - 1 to set card in promiscuous mode, 0 to not */
-            500, /* to_ms - amount of time to perform packet capture in milliseconds */
-            errbuf); /* error message buffer if something goes wrong */
-
-        if (reply == NULL)   /* there was an error */
-        {
-            fprintf(stderr, "%s", errbuf);
-            exit(1);
-        }
-
-        if (strlen(errbuf) > 0)
-        {
-            fprintf(stderr, "Warning: %s", errbuf);  /* a warning was generated */
-            errbuf[0] = 0;    /* re-set error buffer */
-        }
-        
-        if (pcap_sendpacket(reply, reply_packet, 42) < 0)
-        {
-            fprintf(stderr, "%s", errbuf);
-            exit(1);
-        }
-
-        /* close our devices */
-        pcap_close(reply);
+        ptr_ei = ptr_ei->next;
     }
 }
 
@@ -311,7 +323,7 @@ int main(int argc, char *argv[])
                 device = optarg;
                 break;
             case 'l':
-                if (pcap_findalldevs(&alldevsp, errbuf) < 0)
+                if (pcap_findalldevs(&alldevsp, errbuf) == PCAP_ERROR)
                 {
                     fprintf(stderr, "%s", errbuf);
                     exit(1);
@@ -337,7 +349,7 @@ int main(int argc, char *argv[])
     /* find device for sniffing if needed */
     if (device == NULL)   /* if user hasn't specified a device */
     {
-        if (pcap_findalldevs(&alldevsp, errbuf) == -1)
+        if (pcap_findalldevs(&alldevsp, errbuf) == PCAP_ERROR)
         {
             fprintf(stderr, "error finding devices");
             exit(1);
