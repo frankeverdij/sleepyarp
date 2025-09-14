@@ -34,9 +34,9 @@ void ctrl_c(int)
 /* usage */
 void usage(char *name)
 {
-    printf("%s - simple ARP sniffer\n", name);
+    printf("%s - ARP request resolver for dormant hosts\n", name);
     printf("Usage: %s [-i interface] [-l] [-v]\n", name);
-    printf("    -i    interface to sniff on\n");
+    printf("    -i    interface to listen to\n");
     printf("    -l    list available interfaces\n");
     printf("    -v    print verbose info\n\n");
     exit(1);
@@ -312,7 +312,7 @@ int main(int argc, char *argv[])
     char *filter = "arp";           /* filter for BPF (human readable) */
     struct bpf_program fp;          /* compiled BPF filter */
     int r;                          /* generic return value */
-    pcap_if_t *alldevsp;            /* list of interfaces */
+    pcap_if_t *alldevsp, *ad_ptr;   /* list of interfaces */
     struct pcap_addr *addresses;
 
     while ((o = getopt(argc, argv, "i:vl")) > 0)
@@ -328,11 +328,13 @@ int main(int argc, char *argv[])
                     fprintf(stderr, "%s", errbuf);
                     exit(1);
                 }
-                while (alldevsp != NULL)
+                ad_ptr = alldevsp;
+                while (ad_ptr != NULL)
                 {
-                    printf("%s\n", alldevsp->name);
-                    alldevsp = alldevsp->next;
+                    printf("%s\n", ad_ptr->name);
+                    ad_ptr = ad_ptr->next;
                 }
+                pcap_freealldevs(alldevsp);
                 exit(0);
             case 'v':
                 verbose = 1;
