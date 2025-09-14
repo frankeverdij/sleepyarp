@@ -1,0 +1,12 @@
+[Unit]
+Description=ARP resolver daemon for dormant hosts
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/sleepyarp
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
